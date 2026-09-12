@@ -6,7 +6,7 @@ edit, and export them. Built and verified end-to-end locally, currently being
 deployed live.
 
 **Live demo:** _coming soon_
-**Repo:** https://github.com/Vijay-punyamurthy/ai-meeting-notes-summarizer
+**Repo:** [https://github.com/Vijay-punyamurthy/ai-meeting-notes-summarizer](https://ai-meeting-notes-summarizer-plum.vercel.app/)
 
 ## Architecture
 

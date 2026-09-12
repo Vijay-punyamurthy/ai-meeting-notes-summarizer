@@ -1,8 +1,12 @@
 # AI Meeting Notes Summarizer
 
 A full-stack app that takes a raw meeting transcript, runs it through an LLM
-agent to extract a summary + structured action items, and lets you track and
-export them.
+agent to extract a summary and structured action items, and lets you track,
+edit, and export them. Built and verified end-to-end locally, currently being
+deployed live.
+
+**Live demo:** _coming soon_
+**Repo:** https://github.com/Vijay-punyamurthy/ai-meeting-notes-summarizer
 
 ## Architecture
 
@@ -11,6 +15,7 @@ frontend/  React + TypeScript (Vite)
 backend/   Node.js + TypeScript + Express (REST API)
            PostgreSQL  → structured data (meetings, action items)
            MongoDB     → unstructured data (raw transcripts, raw agent output)
+           Groq (OpenAI-compatible API) → LLM agent call
 ```
 
 ### Why two databases (not just decorative)
@@ -21,9 +26,9 @@ backend/   Node.js + TypeScript + Express (REST API)
   belongs to exactly one meeting → foreign key).
 - **MongoDB** holds the raw transcript text and the raw, unvalidated model
   output for each summarization run. This data is variable-length free text,
-  isn't queried relationally, and is kept mainly as an audit trail — "what did
-  the model actually say, and what prompt produced it?" — which is useful for
-  debugging bad summaries later without losing that history to an overwrite.
+  isn't queried relationally, and is kept as an audit trail — "what did the
+  model actually say, and what prompt produced it?" — useful for debugging
+  a bad summary later without losing that history to an overwrite.
 
 ### Handling LLM output safely
 
@@ -32,6 +37,25 @@ validated at runtime against a Zod schema (`backend/src/services/agent.ts`).
 If the model returns malformed or unexpected JSON, the run is marked
 `failed` and the raw output is still stored in Mongo for debugging — the app
 never silently accepts or guesses at bad structured output.
+
+In testing, the model sometimes correctly leaves `owner`/`due_date` as `null`
+when the transcript doesn't clearly state one (rather than fabricating a
+value) — this is treated as expected, honest behavior, not a bug.
+
+### LLM provider
+
+Uses the OpenAI SDK's client shape but points at **Groq's** free,
+OpenAI-compatible endpoint (`https://api.groq.com/openai/v1`) rather than
+OpenAI directly, since Groq's free tier is sufficient for this workload.
+Swapping back to OpenAI, or to any other OpenAI-compatible provider, is a
+one-line env var change — no code change needed.
+
+**Note:** Groq's available model catalog varies per account/key. Before
+setting `OPENAI_MODEL`, check what your key actually has access to:
+```bash
+curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer YOUR_KEY"
+```
+This project was verified working with `openai/gpt-oss-120b`.
 
 ## Project structure
 
@@ -43,7 +67,7 @@ backend/
     db/mongo.ts             Mongo connection + collection helpers
     routes/meetings.ts       /meetings endpoints
     routes/actionItems.ts    /action-items endpoints
-    services/agent.ts        LLM call + output validation
+    services/agent.ts        LLM call + output validation (Zod)
     types.ts
   sql/schema.sql            Postgres table definitions
   .env.example
@@ -71,32 +95,50 @@ frontend/
 | PATCH  | /action-items/:id            | Edit/complete an action item                 |
 | DELETE | /meetings/:id                | Delete a meeting                             |
 
-## Setup
+## Local setup
 
 ### 1. Databases
 
-You need a running Postgres instance and a running MongoDB instance. Easiest
-via Docker:
+Run Postgres and MongoDB via Docker. If default ports (5432 / 27017) are
+already in use on your machine (e.g. by another project), map to different
+host ports as shown:
 
 ```bash
-docker run -d --name pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
-docker run -d --name mongo -p 27017:27017 mongo:7
+docker run -d --name meeting-pg -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:16
+docker run -d --name meeting-mongo -p 27019:27017 mongo:7
 ```
 
-Then load the schema:
+Create the database and load the schema:
 
 ```bash
-psql -h localhost -U postgres -d postgres -c "CREATE DATABASE meeting_notes;"
-psql -h localhost -U postgres -d meeting_notes -f backend/sql/schema.sql
+docker exec -it meeting-pg psql -U postgres -c "CREATE DATABASE meeting_notes;"
+
+# macOS/Linux:
+docker exec -i meeting-pg psql -U postgres -d meeting_notes < backend/sql/schema.sql
+
+# Windows PowerShell (no < redirection support):
+Get-Content backend/sql/schema.sql | docker exec -i meeting-pg psql -U postgres -d meeting_notes
 ```
 
 ### 2. Backend
 
 ```bash
 cd backend
-cp .env.example .env    # fill in OPENAI_API_KEY and DB credentials
+cp .env.example .env    # fill in your ports, Groq key, and model
 npm install
 npm run dev              # http://localhost:4000
+```
+
+Match `.env` to whatever ports you actually used above, e.g.:
+```
+PG_PORT=5434
+MONGO_URI=mongodb://localhost:27019
+```
+
+Verify it's working before moving to the frontend:
+```bash
+curl http://localhost:4000/health
+# → {"ok":true}
 ```
 
 ### 3. Frontend
@@ -110,10 +152,18 @@ npm run dev               # http://localhost:5173 (proxies /api to :4000)
 Open http://localhost:5173, click **+ New Meeting**, paste a transcript, and
 submit — it creates the meeting and immediately runs the summarizer.
 
-## Notes on the LLM client
+## Deployment
 
-The agent service uses the OpenAI SDK format (`backend/src/services/agent.ts`),
-but works with any OpenAI-compatible endpoint (Groq, local models via Ollama's
-OpenAI-compatible mode, etc.) — just change `OPENAI_API_KEY` and add a
-`baseURL` if needed. Swapping in LangChain.js instead of the raw SDK call is a
-drop-in change isolated to that one file.
+This app is deployed with:
+- **Backend + Postgres:** Render (Web Service + managed Postgres)
+- **MongoDB:** MongoDB Atlas (free M0 cluster)
+- **Frontend:** _TBD_
+
+Deployment notes and the live URL will be added here once complete.
+
+## Security note
+
+Never commit `.env` — it's excluded via `.gitignore`. If a real API key is
+ever accidentally committed, revoke it immediately at the provider's console
+and rotate to a new one; a key sitting in git history is compromised even
+after removal from the latest commit.
